@@ -6,10 +6,10 @@ from gtts import gTTS
 import requests
 import urllib.request
 from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
-from fer import FER
+from deepface import DeepFace
 import cv2
-from PIL import Image
 import numpy as np
+from PIL import Image
 
 # ---------------------------
 # 1. Load Environment Variables
@@ -93,7 +93,7 @@ def text_to_speech(text, language='en'):
 # ---------------------------
 # 6. Define Image Fetching Function
 # ---------------------------
-def fetch_images(emotion, count=80):
+def fetch_images(emotion, count=20):  # Reduced count for performance
     try:
         query = emotion
         url = f"https://api.unsplash.com/photos/random?query={query}&client_id={UNSPLASH_ACCESS_KEY}&count={count}"
@@ -126,7 +126,7 @@ def download_images(image_urls):
 # ---------------------------
 # 8. Define Video Creation Function
 # ---------------------------
-def create_video(image_paths, audio_path, output_path='output_video.mp4', duration_per_image=5):
+def create_video(image_paths, audio_path, output_path='output_video.mp4', duration_per_image=3):  # Reduced duration
     try:
         clips = []
         for image in image_paths:
@@ -150,35 +150,34 @@ def create_video(image_paths, audio_path, output_path='output_video.mp4', durati
 # ---------------------------
 # 9. Define Emotion Detection Function
 # ---------------------------
-def detect_emotion(image):
-    """
-    Detects emotion from a given image.
-
-    Parameters:
-    - image (numpy.ndarray): The image in which to detect emotion.
-
-    Returns:
-    - emotion (str): The detected emotion with the highest score.
-    """
-    # Initialize the FER detector
-    detector = FER(mtcnn=True)  # Using MTCNN for face detection
-
-    # Detect emotions in the image
-    emotions = detector.detect_emotions(image)
-
-    if not emotions:
-        return None  # No faces detected
-
-    # Extract the emotions for each detected face
-    detected_emotions = []
-    for face in emotions:
-        emotions_scores = face["emotions"]
-        # Get the emotion with the highest score
-        dominant_emotion = max(emotions_scores, key=emotions_scores.get)
-        detected_emotions.append(dominant_emotion)
-
-    # For simplicity, return the first detected emotion
-    return detected_emotions[0] if detected_emotions else None
+def detect_emotion_from_image(image):
+    try:
+        # Convert the uploaded image to a format suitable for OpenCV
+        img = Image.open(image)
+        img = img.convert('RGB')
+        img_np = np.array(img)
+        img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        
+        # Analyze the emotion using DeepFace
+        analysis = DeepFace.analyze(img_cv, actions=['emotion'], enforce_detection=False)
+        
+        # Determine if the response is a list or a dict
+        if isinstance(analysis, list):
+            if len(analysis) == 0:
+                st.error("No faces detected in the image.")
+                return None
+            # Optionally, handle multiple faces here. For now, we'll take the first one.
+            emotion = analysis[0]['dominant_emotion']
+        elif isinstance(analysis, dict):
+            emotion = analysis['dominant_emotion']
+        else:
+            st.error("Unexpected response format from DeepFace.")
+            return None
+        
+        return emotion
+    except Exception as e:
+        st.error(f"Emotion detection failed: {str(e)}")
+        return None
 
 # ---------------------------
 # 10. Streamlit UI
@@ -189,41 +188,34 @@ st.markdown("""
 This application generates personalized content based on your current emotion and transforms it into an engaging animated video with voiceover.
 """)
 
-# **Emotion Input Options**
-st.header("1. Provide Your Emotion")
+# **Emotion Input Method**
+st.header("Provide Your Emotion")
 
-emotion_option = st.radio(
-    "Choose how you want to provide your emotion:",
-    ("Type your emotion", "Capture emotion via camera")
+emotion_input_method = st.radio(
+    "Choose how to provide your emotion:",
+    ("Manual Input", "Use Camera")
 )
 
-if emotion_option == "Type your emotion":
+user_emotion = None  # Initialize
+
+if emotion_input_method == "Manual Input":
     user_emotion = st.text_input("How are you feeling today?", placeholder="e.g., happy, anxious, calm")
-elif emotion_option == "Capture emotion via camera":
-    # Use camera input to capture image
-    captured_image = st.camera_input("Capture your facial expression:")
+elif emotion_input_method == "Use Camera":
+    st.header("Detect Emotion via Camera")
+    # Capture image from webcam
+    captured_image = st.camera_input("Take a picture to detect your emotion")
+    
     if captured_image:
-        # Display the captured image
-        image = Image.open(captured_image)
-        st.image(image, caption='Captured Image', use_column_width=True)
+        st.image(captured_image, caption="Captured Image", use_column_width=True)
         
-        # Convert the image to a numpy array
-        image_np = np.array(image.convert('RGB'))
-        
-        # Detect emotion
-        with st.spinner("Detecting emotion from the captured image..."):
-            detected_emotion = detect_emotion(image_np)
-        
-        if detected_emotion:
-            st.success(f"Detected Emotion: **{detected_emotion.capitalize()}**")
-            user_emotion = detected_emotion
-        else:
-            st.error("Could not detect any face or emotion in the captured image.")
-            user_emotion = None
-    else:
-        user_emotion = None
-else:
-    user_emotion = None
+        # Proceed to detect emotion
+        with st.spinner("Detecting emotion..."):
+            detected_emotion = detect_emotion_from_image(captured_image)
+            if detected_emotion:
+                st.success(f"Detected Emotion: {detected_emotion}")
+                user_emotion = detected_emotion
+            else:
+                st.error("Failed to detect emotion.")
 
 # **Content Type Selection**
 user_choice = st.selectbox("Select content type:", [
@@ -329,8 +321,10 @@ if st.button("Generate"):
                             st.error("Image downloading failed.")
                     else:
                         st.error("Image fetching failed.")
+                else:
+                    st.error("Voiceover generation failed.")
         else:
-            st.warning("Please provide your emotion (either type it or capture via camera), select a content type, and choose a language.")
+            st.warning("Please provide your emotion, select a content type, and choose a language.")
 
 # **Reset Button**
 if st.button("Reset"):
