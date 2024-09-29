@@ -1,0 +1,11 @@
+streamlit
+python-dotenv
+google-generativeai
+gTTS
+requests
+moviepy
+fer
+opencv-python
+Pillow
+numpy
+mtcnn
